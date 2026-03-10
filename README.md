@@ -1,9 +1,9 @@
 # RoShaders
 [**Github**](https://github.com/thekingofspace/RoShader)
 
-A lightweight, per instance "shader" system for Roblox that lets you attach modular **Fragments** to any `Instance`. Each Fragment runs a `compute → apply` loop every frame, allowing you to layer independent visual or data effects onto objects cleanly.
+A lightweight, per-instance "shader" system for Roblox that lets you attach modular **Fragments** to any `Instance`. Each Fragment runs a `compute → apply` loop every frame, allowing you to layer independent visual or data effects onto objects cleanly.
 
-These are not truly GPU shaders, it is just inspired by the syste
+> These are not truly GPU shaders — just inspired by the concept.
 
 ---
 
@@ -19,18 +19,18 @@ local Shader = require(ReplicatedStorage.Shader)
 
 | Concept | Description |
 |---|---|
-| **Shader** | A controller bound to one `Instance`. Manages all Fragments on that instance. |
+| **Shader** | A controller bound to one `Instance`. Manages all Fragments on that instance. Holds shared data readable by all its Fragments. |
 | **Fragment** | A single modular effect. Defines how to `compute` data each frame and how to `apply` it to the instance. |
+| **Priority** | Controls the order Fragments are applied. All Fragments compute in parallel every frame, but are applied in ascending priority order (`0` before `1` before `2`, etc.). |
+| **Shader Data** | A shared key-value store on the Shader itself. All Fragments on the same Shader can read from it during `compute` and `apply`. |
+| **Fragment Data** | A private key-value store per Fragment. Used for local state like timers and accumulators. |
 
 ---
 
 ## Module API
 
 ### `Shader.CreateShader(instance: Instance) → Shader`
-
-Creates and returns a Shader bound to the given instance. If a Shader already exists for that instance, the existing one is returned.
-
-The Shader is automatically destroyed when the instance is removed from the DataModel.
+Creates and returns a Shader bound to the given instance. If a Shader already exists for that instance, the existing one is returned. The Shader is automatically destroyed when the instance is removed from the DataModel.
 
 ```lua
 local myShader = Shader.CreateShader(workspace.Part)
@@ -39,7 +39,6 @@ local myShader = Shader.CreateShader(workspace.Part)
 ---
 
 ### `Shader.GetShader(instance: Instance) → Shader?`
-
 Returns the existing Shader for an instance, or `nil` if none exists.
 
 ```lua
@@ -52,8 +51,7 @@ end
 ---
 
 ### `Shader.DestroyShader(instance: Instance)`
-
-Destroys the Shader bound to the given instance, cleaning up all Fragments and restoring any snapshotted properties.
+Destroys the Shader bound to the given instance, cleaning up all Fragments.
 
 ```lua
 Shader.DestroyShader(workspace.Part)
@@ -68,19 +66,18 @@ Once you have a `Shader` object, you can call these methods on it.
 ---
 
 ### `shader:AddFragment(config: FragmentConfig) → Fragment`
-
-Registers a new Fragment on this Shader. Starts the per-frame compute/apply loop immediately.
+Registers a new Fragment on this Shader and starts its per-frame compute/apply loop immediately.
 
 ```lua
 shader:AddFragment({
-    id = "Pulse",
-    compute = function(target, dt, data)
+    id       = "Pulse",
+    priority = 0,
+    compute = function(target, dt, data, shaderData)
         data.t = (data.t or 0) + dt
-        return { Transparency = math.abs(math.sin(data.t)) }
+        return { transparency = math.abs(math.sin(data.t)) }
     end,
-    apply = function(target, payload, data)
-        target.Transparency = payload.Transparency
-        return payload -- keys returned here will be snapshot-restored on disable
+    apply = function(target, payload, data, shaderData)
+        target.Transparency = payload.transparency
     end,
 })
 ```
@@ -88,8 +85,7 @@ shader:AddFragment({
 ---
 
 ### `shader:RemoveFragment(id: string)`
-
-Permanently removes the Fragment, cancels its loop, restores snapshotted properties (unless `maintainOnDisable = true`), destroys any generated instances, and fires `onDisabled`.
+Permanently removes the Fragment, cancels its loop, destroys any generated instances, and fires `onDisabled`.
 
 ```lua
 shader:RemoveFragment("Pulse")
@@ -98,7 +94,6 @@ shader:RemoveFragment("Pulse")
 ---
 
 ### `shader:EnableFragment(id: string)`
-
 Re-enables a previously disabled Fragment and fires `onEnabled`.
 
 ```lua
@@ -107,22 +102,17 @@ shader:EnableFragment("Pulse")
 
 ---
 
-### `shader:DisableFragment(id: string, maintain: boolean?)`
-
-Pauses the Fragment's loop and fires `onDisabled`. If `maintain` is `false` (or `maintainOnDisable` is `false` in the config), original property values are restored.
-
-`maintain` overrides the Fragment's `maintainOnDisable` config when provided.
+### `shader:DisableFragment(id: string)`
+Pauses the Fragment's loop, clears its internal data, and fires `onDisabled`.
 
 ```lua
-shader:DisableFragment("Pulse")          -- uses config default
-shader:DisableFragment("Pulse", true)    -- keeps current visual state
+shader:DisableFragment("Pulse")
 ```
 
 ---
 
 ### `shader:FlushFragment(id: string)`
-
-Destroys all instances generated by a Fragment's `init` function, without removing the Fragment itself.
+Destroys all instances generated by a Fragment's `init` function without removing the Fragment itself.
 
 ```lua
 shader:FlushFragment("Glow")
@@ -131,7 +121,6 @@ shader:FlushFragment("Glow")
 ---
 
 ### `shader:GetGenerated(id: string) → {Instance}`
-
 Returns the list of instances created by a Fragment's `init` function.
 
 ```lua
@@ -141,8 +130,7 @@ local parts = shader:GetGenerated("Glow")
 ---
 
 ### `shader:WriteData(fragmentId: string, key: string, value: any)`
-
-Writes a value into a Fragment's internal data table. Useful for passing external signals into a Fragment's compute loop.
+Writes a value into a Fragment's private data table. Useful for feeding external signals into a Fragment's compute loop.
 
 ```lua
 shader:WriteData("Pulse", "speed", 3)
@@ -151,8 +139,7 @@ shader:WriteData("Pulse", "speed", 3)
 ---
 
 ### `shader:ReadData(fragmentId: string, key: string) → any`
-
-Reads a value from a Fragment's internal data table.
+Reads a value from a Fragment's private data table.
 
 ```lua
 local speed = shader:ReadData("Pulse", "speed")
@@ -160,8 +147,26 @@ local speed = shader:ReadData("Pulse", "speed")
 
 ---
 
-### `shader:Destroy()`
+### `shader:WriteShaderData(key: string, value: any)`
+Writes a value into the Shader's shared data store. All Fragments on this Shader can read it via the `shaderData` argument in `compute` and `apply`.
 
+```lua
+shader:WriteShaderData("health", 75)
+shader:WriteShaderData("baseColor", Color3.fromRGB(50, 120, 255))
+```
+
+---
+
+### `shader:ReadShaderData(key: string) → any`
+Reads a value from the Shader's shared data store.
+
+```lua
+local health = shader:ReadShaderData("health")
+```
+
+---
+
+### `shader:Destroy()`
 Removes all Fragments and unbinds the Shader from its instance. Equivalent to calling `Shader.DestroyShader(instance)`.
 
 ```lua
@@ -170,26 +175,40 @@ shader:Destroy()
 
 ---
 
-##  FragmentConfig
+## FragmentConfig
 
-The table you pass to `AddFragment`. Only `id`, `compute` (optional), and `apply` are required.
+The table passed to `AddFragment`. Only `id` and `apply` are required — `compute` is optional but typical.
 
 ```lua
 type FragmentConfig = {
     id: string,
 
-    -- If true, current property values are NOT restored when the fragment is disabled/removed.
+    -- Lower number = applied first. Defaults to 0.
+    -- All fragments compute in parallel; priority only affects apply order.
+    priority: number?,
+
+    -- If true, fragment data is NOT cleared when the fragment is disabled.
     maintainOnDisable: boolean?,
 
-    -- Runs every frame off the main thread. Return a payload table, or nil to skip apply.
-    compute: (target: Instance, dt: number, data: {[string]: any}) -> {[string]: any}?,
+    -- Runs every frame (potentially off the main thread).
+    -- Return a payload table to pass to apply, or nil to skip apply this frame.
+    compute: (
+        target:     Instance,
+        dt:         number,
+        data:       {[string]: any},   -- this fragment's private data
+        shaderData: {[string]: any}    -- shared data across all fragments on this shader
+    ) -> {[string]: any}?,
 
-    -- Runs every frame on the main thread with the latest payload.
-    -- Return a table of keys you wrote to `target` — these will be snapshot-restored on disable.
-    apply: (target: Instance, payload: {[string]: any}, data: {[string]: any}) -> {[string]: any},
+    -- Runs every frame on the main thread with the latest computed payload.
+    apply: (
+        target:     Instance,
+        payload:    {[string]: any},
+        data:       {[string]: any},   -- this fragment's private data
+        shaderData: {[string]: any}    -- shared data across all fragments on this shader
+    ) -> (),
 
-    -- Called once when the fragment is first added (and on each re-enable).
-    -- Return a list of Instances to track as "generated".
+    -- Called once when the fragment is first added.
+    -- Return a list of Instances to track as "generated" (cleaned up on RemoveFragment/FlushFragment).
     init: ((target: Instance, data: {[string]: any}) -> {Instance})?,
 
     onEnabled:  ((target: Instance) -> ())?,
@@ -199,45 +218,125 @@ type FragmentConfig = {
 
 ---
 
-##  Full Example
+## Priority & Execution Model
+
+Every frame, **all active Fragments compute in parallel** regardless of priority. Once all compute calls finish, the results are **applied in ascending priority order** — so a Fragment with `priority = 0` will always write its properties before a Fragment with `priority = 1` overwrites them.
+
+```
+Frame N:
+  [compute]  BaseColor(0)  ──┐
+  [compute]  PulseAlpha(1) ──┤  all run in parallel
+  [compute]  DamageFlash(2)──┘
+
+  [apply]    BaseColor(0)   → sets Color to blue
+  [apply]    PulseAlpha(1)  → sets Transparency on top
+  [apply]    DamageFlash(2) → overrides Color to red if health < 25
+```
+
+This means **higher-priority-number Fragments always win** on any property they both write.
+
+---
+
+## Full Example
 
 ```lua
 local Shader = require(ReplicatedStorage.Shader)
-local part = workspace.SomePart
 
--- Create a shader on the part
-local myShader = Shader.CreateShader(part)
+local part   = workspace.SomePart
+local shader = Shader.CreateShader(part)
 
--- Add a pulse transparency effect
-myShader:AddFragment({
-    id = "Pulse",
-    maintainOnDisable = false,
-    compute = function(target, dt, data)
-        data.t = (data.t or 0) + dt
-        local speed = data.speed or 1
-        return { Transparency = math.abs(math.sin(data.t * speed)) }
+-- Shared state driven from outside (e.g. your damage system)
+shader:WriteShaderData("baseColor", Color3.fromRGB(50, 120, 255))
+shader:WriteShaderData("health",    100)
+
+
+-- Priority 0: sets the base colour from shared shader data
+shader:AddFragment({
+    id       = "BaseColor",
+    priority = 0,
+
+    compute = function(target, dt, data, shaderData)
+        return { color = shaderData.baseColor }
     end,
-    apply = function(target, payload, data)
-        target.Transparency = payload.Transparency
-        return { Transparency = true }
-    end,
-    onEnabled = function(target)
-        print("Pulse started on", target.Name)
-    end,
-    onDisabled = function(target)
-        print("Pulse stopped on", target.Name)
+
+    apply = function(target, payload, data, shaderData)
+        (target :: BasePart).Color = payload.color
     end,
 })
 
--- Speed it up from outside
-myShader:WriteData("Pulse", "speed", 4)
 
--- Pause it (restores original Transparency)
-myShader:DisableFragment("Pulse")
+-- Priority 1: pulses transparency on top of whatever priority-0 wrote
+shader:AddFragment({
+    id       = "PulseAlpha",
+    priority = 1,
 
--- Resume it
-myShader:EnableFragment("Pulse")
+    init = function(target, data)
+        data.timer = 0
+        return {}
+    end,
 
--- Clean up entirely
-Shader.DestroyShader(part)
+    compute = function(target, dt, data, shaderData)
+        data.timer += dt
+        return { transparency = (math.sin(data.timer * 3) + 1) / 2 * 0.5 }
+    end,
+
+    apply = function(target, payload, data, shaderData)
+        (target :: BasePart).Transparency = payload.transparency
+    end,
+
+    onEnabled  = function(target) print("PulseAlpha on",  target.Name) end,
+    onDisabled = function(target)
+        (target :: BasePart).Transparency = 0
+        print("PulseAlpha off", target.Name)
+    end,
+})
+
+
+-- Priority 2: flashes red when health is low — always wins over BaseColor
+shader:AddFragment({
+    id       = "DamageFlash",
+    priority = 2,
+
+    init = function(target, data)
+        data.flashTimer = 0
+        return {}
+    end,
+
+    compute = function(target, dt, data, shaderData)
+        if (shaderData.health or 100) > 25 then return nil end
+        data.flashTimer += dt
+        local bright = math.sin(data.flashTimer * 4 * math.pi) > 0
+        return { color = if bright then Color3.fromRGB(255, 30, 30) else Color3.fromRGB(120, 0, 0) }
+    end,
+
+    apply = function(target, payload, data, shaderData)
+        (target :: BasePart).Color = payload.color
+    end,
+})
+
+
+-- ── Runtime control ───────────────────────────────────────────────────────────
+
+-- Simulate taking damage
+task.delay(3, function()
+    shader:WriteShaderData("health", 20)
+end)
+
+-- Swap the base colour at runtime
+task.delay(5, function()
+    shader:WriteShaderData("baseColor", Color3.fromRGB(30, 200, 80))
+end)
+
+-- Pause the pulse
+task.delay(6, function()
+    shader:DisableFragment("PulseAlpha")
+end)
+
+-- Resume the pulse
+task.delay(9, function()
+    shader:EnableFragment("PulseAlpha")
+end)
+
+-- Full teardown
+-- shader:Destroy()
 ```
