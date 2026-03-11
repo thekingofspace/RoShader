@@ -187,6 +187,7 @@ function ShaderMethods:FlushFragment(id: string)
 		warn(`Fragment '{id}' not found.`)
 		return
 	end
+	table.clear(frag._data)
 	flushGenerated(frag)
 end
 
@@ -226,7 +227,6 @@ function ShaderMethods:DisableFragment(id: string)
 	end
 
 	frag.active = false
-	table.clear(frag._data)
 
 	if frag._config.onDisabled then
 		frag._config.onDisabled(self.instance)
