@@ -9,10 +9,22 @@ local module = {}
 
 export type FragmentConfig = {
 	id: string,
-	priority: number?,                  -- Lower number = runs first. Defaults to 0.
+	priority: number?,
 	maintainOnDisable: boolean?,
-	compute: (target: Instance, dt: number, data: {[string]: any}, shaderData: {[string]: any}) -> {[string]: any}?,
-	apply: (target: Instance, payload: {[string]: any}, data: {[string]: any}, shaderData: {[string]: any}) -> (),
+	compute: (
+		target: Instance,
+		dt: number,
+		data: {[string]: any},
+		shaderData: {[string]: any},
+		generated: {Instance}
+	) -> {[string]: any}?,
+	apply: (
+		target: Instance,
+		payload: {[string]: any},
+		data: {[string]: any},
+		shaderData: {[string]: any},
+		generated: {Instance}
+	) -> (),
 	init: ((target: Instance, data: {[string]: any}) -> {Instance})?,
 	onEnabled: ((target: Instance) -> ())?,
 	onDisabled: ((target: Instance) -> ())?,
@@ -73,11 +85,11 @@ function ShaderMethods:AddFragment(config: FragmentConfig): Fragment
 	assert(not self.fragments[config.id], `Fragment '{config.id}' already exists on this shader.`)
 
 	local frag: Fragment = {
-		id       = config.id,
-		priority = config.priority or 0,
-		active   = true,
-		_config  = config,
-		_data    = {},
+		id        = config.id,
+		priority  = config.priority or 0,
+		active    = true,
+		_config   = config,
+		_data     = {},
 		generated = {},
 	}
 
@@ -94,7 +106,7 @@ function ShaderMethods:AddFragment(config: FragmentConfig): Fragment
 		end
 	end
 
-	local key       = taskKey(self._uid, config.id)
+	local key = taskKey(self._uid, config.id)
 	local shaderRef = self
 
 	RunManager.AddTask(
@@ -104,16 +116,45 @@ function ShaderMethods:AddFragment(config: FragmentConfig): Fragment
 
 		function(target: Instance, dt: number)
 			local f = shaderRef.fragments[config.id]
-			if not f or not f.active then return nil end
-			return f._config.compute(target, dt, f._data, shaderRef._data)
+			if not f or not f.active then
+				return nil
+			end
+
+			if not f._config.compute then
+				return nil
+			end
+
+			return f._config.compute(
+				target,
+				dt,
+				f._data,
+				shaderRef._data,
+				f.generated
+			)
 		end,
 
 		function(target: Instance, payloads: {{[string]: any}})
 			local f = shaderRef.fragments[config.id]
-			if not f or not f.active then return end
+			if not f or not f.active then
+				return
+			end
+
+			if not f._config.apply then
+				return
+			end
+
 			local latest = payloads[#payloads]
-			if not latest then return end
-			f._config.apply(target, latest, f._data, shaderRef._data)
+			if not latest then
+				return
+			end
+
+			f._config.apply(
+				target,
+				latest,
+				f._data,
+				shaderRef._data,
+				f.generated
+			)
 		end
 	)
 
@@ -126,7 +167,9 @@ end
 
 function ShaderMethods:RemoveFragment(id: string)
 	local frag = self.fragments[id]
-	if not frag then return end
+	if not frag then
+		return
+	end
 
 	RunManager.RemoveTask(taskKey(self._uid, id))
 
@@ -135,26 +178,35 @@ function ShaderMethods:RemoveFragment(id: string)
 	end
 
 	flushGenerated(frag)
-
 	self.fragments[id] = nil
 end
 
 function ShaderMethods:FlushFragment(id: string)
 	local frag = self.fragments[id]
-	if not frag then warn(`Fragment '{id}' not found.`); return end
+	if not frag then
+		warn(`Fragment '{id}' not found.`)
+		return
+	end
 	flushGenerated(frag)
 end
 
 function ShaderMethods:GetGenerated(id: string): {Instance}
 	local frag = self.fragments[id]
-	if not frag then warn(`Fragment '{id}' not found.`); return {} end
+	if not frag then
+		return {}
+	end
 	return frag.generated
 end
 
 function ShaderMethods:EnableFragment(id: string)
 	local frag = self.fragments[id]
-	if not frag then warn(`Fragment '{id}' not found.`); return end
-	if frag.active then return end
+	if not frag then
+		warn(`Fragment '{id}' not found.`)
+		return
+	end
+	if frag.active then
+		return
+	end
 
 	frag.active = true
 
@@ -165,8 +217,13 @@ end
 
 function ShaderMethods:DisableFragment(id: string)
 	local frag = self.fragments[id]
-	if not frag then warn(`Fragment '{id}' not found.`); return end
-	if not frag.active then return end
+	if not frag then
+		warn(`Fragment '{id}' not found.`)
+		return
+	end
+	if not frag.active then
+		return
+	end
 
 	frag.active = false
 	table.clear(frag._data)
@@ -176,20 +233,23 @@ function ShaderMethods:DisableFragment(id: string)
 	end
 end
 
--- Per-fragment data
 function ShaderMethods:WriteData(fragmentId: string, key: string, value: any)
 	local frag = self.fragments[fragmentId]
-	if not frag then warn(`Fragment '{fragmentId}' not found.`); return end
+	if not frag then
+		warn(`Fragment '{fragmentId}' not found.`)
+		return
+	end
 	frag._data[key] = value
 end
 
 function ShaderMethods:ReadData(fragmentId: string, key: string): any
 	local frag = self.fragments[fragmentId]
-	if not frag then return nil end
+	if not frag then
+		return nil
+	end
 	return frag._data[key]
 end
 
--- Shader-level shared data (visible to all fragments on this shader)
 function ShaderMethods:WriteShaderData(key: string, value: any)
 	self._data[key] = value
 end
