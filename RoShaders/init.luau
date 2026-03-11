@@ -25,9 +25,9 @@ export type FragmentConfig = {
 		shaderData: {[string]: any},
 		generated: {Instance}
 	) -> (),
-	init: ((target: Instance, data: {[string]: any}) -> {Instance})?,
-	onEnabled: ((target: Instance) -> ())?,
-	onDisabled: ((target: Instance) -> ())?,
+	init: ((target: Instance, data: {[string]: any}, shaderData: {[string]: any}) -> {Instance})?,
+	onEnabled: ((target: Instance, data: {[string]: any}, shaderData: {[string]: any}) -> ())?,
+	onDisabled: ((target: Instance, data: {[string]: any}, shaderData: {[string]: any}) -> ())?,
 }
 
 export type Fragment = {
@@ -96,7 +96,7 @@ function ShaderMethods:AddFragment(config: FragmentConfig): Fragment
 	self.fragments[config.id] = frag
 
 	if config.init then
-		local ok, result = pcall(config.init, self.instance, frag._data)
+		local ok, result = pcall(config.init, self.instance, frag._data, self._data)
 		if ok and result then
 			for _, inst in ipairs(result) do
 				table.insert(frag.generated, inst)
@@ -159,7 +159,7 @@ function ShaderMethods:AddFragment(config: FragmentConfig): Fragment
 	)
 
 	if config.onEnabled then
-		config.onEnabled(self.instance)
+		config.onEnabled(self.instance, frag._data, self._data)
 	end
 
 	return frag
@@ -174,7 +174,7 @@ function ShaderMethods:RemoveFragment(id: string)
 	RunManager.RemoveTask(taskKey(self._uid, id))
 
 	if frag._config.onDisabled then
-		frag._config.onDisabled(self.instance)
+		frag._config.onDisabled(self.instance, frag._data, self._data)
 	end
 
 	flushGenerated(frag)
@@ -212,7 +212,7 @@ function ShaderMethods:EnableFragment(id: string)
 	frag.active = true
 
 	if frag._config.onEnabled then
-		frag._config.onEnabled(self.instance)
+		frag._config.onEnabled(self.instance, frag._data, self._data)
 	end
 end
 
@@ -229,7 +229,7 @@ function ShaderMethods:DisableFragment(id: string)
 	frag.active = false
 
 	if frag._config.onDisabled then
-		frag._config.onDisabled(self.instance)
+		frag._config.onDisabled(self.instance, frag._data, self._data)
 	end
 end
 
