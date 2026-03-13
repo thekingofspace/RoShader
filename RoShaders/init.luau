@@ -7,6 +7,8 @@ end
 local RunManager = require("@self/RunServiceLoader")
 local module = {}
 
+export type FragmentAction = (shaderData: {[string]: any}, fragData: {[string]: any}, ...any) -> ()
+
 export type FragmentConfig = {
 	id: string,
 	priority: number?,
@@ -15,19 +17,19 @@ export type FragmentConfig = {
 		target: Instance,
 		dt: number,
 		data: {[string]: any},
-		shaderData: {[string]: any},
-		generated: {Instance}
+		shaderData: {[string]: any}
 	) -> {[string]: any}?,
 	apply: (
 		target: Instance,
 		payload: {[string]: any},
 		data: {[string]: any},
-		shaderData: {[string]: any},
-		generated: {Instance}
+		shaderData: {[string]: any}
 	) -> (),
-	init: ((target: Instance, data: {[string]: any}, shaderData: {[string]: any}) -> {Instance})?,
+	init: ((target: Instance, data: {[string]: any}, shaderData: {[string]: any}) -> ())?,
 	onEnabled: ((target: Instance, data: {[string]: any}, shaderData: {[string]: any}) -> ())?,
 	onDisabled: ((target: Instance, data: {[string]: any}, shaderData: {[string]: any}) -> ())?,
+	onDestroy: ((shaderData: {[string]: any}, fragData: {[string]: any}) -> ())?,
+	actions: {[string]: FragmentAction}?,
 }
 
 export type Fragment = {
@@ -36,7 +38,7 @@ export type Fragment = {
 	active: boolean,
 	_config: FragmentConfig,
 	_data: {[string]: any},
-	generated: {Instance},
+	_actions: {[string]: FragmentAction},
 }
 
 export type Shader = {
@@ -53,7 +55,7 @@ export type Shader = {
 	ReadData: (self: Shader, fragmentId: string, key: string) -> any,
 	WriteShaderData: (self: Shader, key: string, value: any) -> (),
 	ReadShaderData: (self: Shader, key: string) -> any,
-	GetGenerated: (self: Shader, fragmentId: string) -> {Instance},
+	RunAction: (self: Shader, fragmentId: string, actionId: string, ...any) -> (),
 	Destroy: (self: Shader) -> (),
 }
 
@@ -63,15 +65,6 @@ local _uidCounter = 0
 local function nextUID(): string
 	_uidCounter += 1
 	return tostring(_uidCounter)
-end
-
-local function flushGenerated(frag: Fragment)
-	for _, inst in ipairs(frag.generated) do
-		if inst and inst.Parent then
-			inst:Destroy()
-		end
-	end
-	table.clear(frag.generated)
 end
 
 local function taskKey(shaderUID: string, fragmentId: string): string
@@ -85,24 +78,20 @@ function ShaderMethods:AddFragment(config: FragmentConfig): Fragment
 	assert(not self.fragments[config.id], `Fragment '{config.id}' already exists on this shader.`)
 
 	local frag: Fragment = {
-		id        = config.id,
-		priority  = config.priority or 0,
-		active    = true,
-		_config   = config,
-		_data     = {},
-		generated = {},
+		id       = config.id,
+		priority = config.priority or 0,
+		active   = true,
+		_config  = config,
+		_data    = {},
+		_actions = config.actions or {},
 	}
 
 	self.fragments[config.id] = frag
 
 	if config.init then
-		local ok, result = pcall(config.init, self.instance, frag._data, self._data)
-		if ok and result then
-			for _, inst in ipairs(result) do
-				table.insert(frag.generated, inst)
-			end
-		else
-			warn(`Fragment '{config.id}' init error: {result}`)
+		local ok, err = pcall(config.init, self.instance, frag._data, self._data)
+		if not ok then
+			warn(`Fragment '{config.id}' init error: {err}`)
 		end
 	end
 
@@ -128,8 +117,7 @@ function ShaderMethods:AddFragment(config: FragmentConfig): Fragment
 				target,
 				dt,
 				f._data,
-				shaderRef._data,
-				f.generated
+				shaderRef._data
 			)
 		end,
 
@@ -152,8 +140,7 @@ function ShaderMethods:AddFragment(config: FragmentConfig): Fragment
 				target,
 				latest,
 				f._data,
-				shaderRef._data,
-				f.generated
+				shaderRef._data
 			)
 		end
 	)
@@ -177,7 +164,13 @@ function ShaderMethods:RemoveFragment(id: string)
 		frag._config.onDisabled(self.instance, frag._data, self._data)
 	end
 
-	flushGenerated(frag)
+	if frag._config.onDestroy then
+		local ok, err = pcall(frag._config.onDestroy, self._data, frag._data)
+		if not ok then
+			warn(`Fragment '{id}' onDestroy error: {err}`)
+		end
+	end
+
 	self.fragments[id] = nil
 end
 
@@ -188,15 +181,6 @@ function ShaderMethods:FlushFragment(id: string)
 		return
 	end
 	table.clear(frag._data)
-	flushGenerated(frag)
-end
-
-function ShaderMethods:GetGenerated(id: string): {Instance}
-	local frag = self.fragments[id]
-	if not frag then
-		return {}
-	end
-	return frag.generated
 end
 
 function ShaderMethods:EnableFragment(id: string)
@@ -256,6 +240,26 @@ end
 
 function ShaderMethods:ReadShaderData(key: string): any
 	return self._data[key]
+end
+
+-- Run a named action on a fragment, forwarding shaderData + fragData + any extra args
+function ShaderMethods:RunAction(fragmentId: string, actionId: string, ...)
+	local frag = self.fragments[fragmentId]
+	if not frag then
+		warn(`Fragment '{fragmentId}' not found.`)
+		return
+	end
+
+	local action = frag._actions[actionId]
+	if not action then
+		warn(`Action '{actionId}' not found on fragment '{fragmentId}'.`)
+		return
+	end
+
+	local ok, err = pcall(action, self._data, frag._data, ...)
+	if not ok then
+		warn(`Fragment '{fragmentId}' action '{actionId}' error: {err}`)
+	end
 end
 
 function ShaderMethods:Destroy()
