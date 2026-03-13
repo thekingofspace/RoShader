@@ -242,7 +242,6 @@ function ShaderMethods:ReadShaderData(key: string): any
 	return self._data[key]
 end
 
--- Run a named action on a fragment, forwarding shaderData + fragData + any extra args
 function ShaderMethods:RunAction(fragmentId: string, actionId: string, ...)
 	local frag = self.fragments[fragmentId]
 	if not frag then
