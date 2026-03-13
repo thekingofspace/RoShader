@@ -9,7 +9,7 @@ local Actor = script:GetActor()
 export type Task = {
 	id: string,
 	target: Instance,
-	priority: number,   -- Lower number = applied first within the same instance
+	priority: number,
 	args: {any},
 	compute: ComputeFn,
 	onApply: OnApply,
@@ -72,7 +72,6 @@ function Manager.RemoveAllTasksFor(target: Instance)
 	_staged[target] = nil
 end
 
--- All fragments compute in parallel (desynchronized), then results are staged.
 local function runCompute(dt: number)
 	if Actor then
 		task.desynchronize()
@@ -90,12 +89,9 @@ local function runCompute(dt: number)
 	end
 end
 
--- Collect all pending task IDs for an instance, sort by priority, then apply in order.
 local function flushApply()
 	for instance, byTask in pairs(_staged) do
 		if instance.Parent then
-
-			-- Build an ordered list of tasks that have staged payloads
 			local ordered: {Task} = {}
 			for taskId, payloads in pairs(byTask) do
 				local t = _tasks[taskId]
@@ -104,12 +100,10 @@ local function flushApply()
 				end
 			end
 
-			-- Sort ascending by priority (lower number = applied first)
 			table.sort(ordered, function(a, b)
 				return a.priority < b.priority
 			end)
 
-			-- Apply in priority order
 			for _, t in ipairs(ordered) do
 				local payloads = byTask[t.id]
 				t.onApply(instance, payloads)
